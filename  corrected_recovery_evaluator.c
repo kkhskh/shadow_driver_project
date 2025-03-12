@@ -15,6 +15,8 @@
 #include <linux/time.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
+#include <linux/version.h>
+#include <linux/stdarg.h>
 
 /* Maximum number of test cases to store */
 #define MAX_TEST_CASES 50
@@ -31,7 +33,6 @@ enum recovery_phase {
     PHASE_RECOVERY_COMPLETE,  /* Recovery has completed successfully */
     PHASE_RECOVERY_FAILED     /* Recovery has failed */
 };
-
 
 /* Structure to track recovery events */
 struct recovery_event {
@@ -64,10 +65,6 @@ struct recovery_test {
     /* Linked list */
     struct list_head list;
 };
-static int add_event(struct recovery_test *test, enum recovery_phase phase, 
-                    const char *fmt, ...);
-static int start_test(const char *name, const char *driver);
-static int end_test(bool success);
 
 /* Global state */
 static LIST_HEAD(test_cases);
@@ -75,6 +72,12 @@ static int num_test_cases = 0;
 static struct recovery_test *current_test = NULL;
 static spinlock_t test_lock;
 static struct proc_dir_entry *recovery_proc_entry;
+
+/* Function declarations - these aren't static because they're exported */
+int add_event(struct recovery_test *test, enum recovery_phase phase, 
+              const char *fmt, ...);
+int start_test(const char *name, const char *driver);
+int end_test(bool success);
 
 /**
  * start_test - Start a new recovery test
@@ -109,12 +112,7 @@ int start_test(const char *name, const char *driver)
         /* If there's a current test, mark it as incomplete */
         current_test->completed = false;
         current_test->end_time = jiffies;
-        // add_event(current_test, PHASE_NONE, "Test interrupted by new test");
-        /* With: */
-        if (current_test) {
-            struct recovery_test *test = current_test;
-            add_event(test, PHASE_NONE, "Test interrupted by new test");
-}
+        add_event(current_test, PHASE_NONE, "Test interrupted by new test");
     }
     
     if (num_test_cases >= MAX_TEST_CASES) {
@@ -424,13 +422,15 @@ static ssize_t recovery_proc_write(struct file *file, const char __user *buffer,
 }
 
 /* File operations for the proc file */
-static const struct proc_ops recovery_proc_fops = {
-    .proc_open = recovery_proc_open,
-    .proc_read = seq_read,
-    .proc_write = recovery_proc_write,
-    .proc_lseek = seq_lseek,
-    .proc_release = single_release,
+static const struct file_operations recovery_proc_fops = {
+    .owner = THIS_MODULE,
+    .open = recovery_proc_open,
+    .read = seq_read,
+    .write = recovery_proc_write,
+    .llseek = seq_lseek,
+    .release = single_release
 };
+
 /**
  * init_recovery_evaluator - Initialize the recovery evaluator
  *
