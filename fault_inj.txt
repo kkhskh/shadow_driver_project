@@ -14,7 +14,6 @@
 #include <linux/seq_file.h>
 #include <linux/uaccess.h>
 #include <linux/delay.h>
-#include <linux/kallsyms.h>
 
 /* Fault types that can be injected */
 enum fault_type {
@@ -28,85 +27,6 @@ enum fault_type {
     FAULT_HANG            = 7,  /* Just hang the driver */
     FAULT_MAX             = 8   /* Number of fault types */
 };
-
-struct target_driver {
-    char name[64];
-    char *function_names[16]; /* Functions to target */
-    int num_functions;
-    bool active;
-};
-
-#define MAX_TARGET_DRIVERS 5
-static struct target_driver target_drivers[MAX_TARGET_DRIVERS];
-static int num_target_drivers = 0;
-
-/* Add function hooking infrastructure */
-struct function_hook {
-    char *name;
-    unsigned long original_addr;
-    unsigned long hook_addr;
-    unsigned char original_bytes[16]; /* Save first bytes of original function */
-    unsigned char hook_bytes[16];     /* Bytes for our hook */
-    bool hooked;
-};
-
-#define MAX_HOOKS 32
-static struct function_hook hooks[MAX_HOOKS];
-static int num_hooks = 0;
-
-/* Function to install a hook (this is simplified - actual implementation would be more complex) */
-static int install_hook(const char *function_name, unsigned long hook_addr) {
-    unsigned long addr = kallsyms_lookup_name(function_name);
-    if (!addr)
-        return -EINVAL;
-        
-    if (num_hooks >= MAX_HOOKS)
-        return -ENOSPC;
-        
-    hooks[num_hooks].name = kstrdup(function_name, GFP_KERNEL);
-    hooks[num_hooks].original_addr = addr;
-    hooks[num_hooks].hook_addr = hook_addr;
-    
-    /* In a real implementation, you would:
-     * 1. Make the memory writable
-     * 2. Save original bytes
-     * 3. Insert a jump to your hook function
-     * 4. Make the memory executable again
-     */
-    
-    hooks[num_hooks].hooked = true;
-    num_hooks++;
-    
-    return 0;
-}
-
-/* Add function to register a target driver */
-static int register_target_driver(const char *driver_name) {
-    if (num_target_drivers >= MAX_TARGET_DRIVERS)
-        return -ENOSPC;
-        
-    strncpy(target_drivers[num_target_drivers].name, driver_name, 63);
-    target_drivers[num_target_drivers].num_functions = 0;
-    target_drivers[num_target_drivers].active = true;
-    
-    num_target_drivers++;
-    return num_target_drivers - 1;
-}
-
-/* Add function to add a target function */
-static int add_target_function(int driver_idx, const char *function_name) {
-    if (driver_idx < 0 || driver_idx >= num_target_drivers)
-        return -EINVAL;
-        
-    if (target_drivers[driver_idx].num_functions >= 16)
-        return -ENOSPC;
-        
-    target_drivers[driver_idx].function_names[target_drivers[driver_idx].num_functions] = 
-        kstrdup(function_name, GFP_KERNEL);
-    target_drivers[driver_idx].num_functions++;
-    
-    return 0;
-}
 
 /* Structure to track fault injection settings */
 struct fault_control {
@@ -140,8 +60,6 @@ static struct fault_control fault_ctrl = {
 /* Forward declarations */
 static void inject_random_fault(void);
 static void schedule_fault_injection(void);
-static ssize_t fault_proc_write(struct file *file, const char __user *buffer,
-                               size_t count, loff_t *ppos);
 
 /* Timer for scheduling fault injection */
 static struct timer_list fault_timer;
@@ -402,7 +320,7 @@ static void inject_random_fault(void)
  */
 static int fault_proc_show(struct seq_file *m, void *v)
 {
-    int i, j;
+    int i;
     
     seq_printf(m, "Fault Injection Status:\n");
     seq_printf(m, "  Enabled:       %s\n", fault_ctrl.enabled ? "Yes" : "No");
@@ -421,25 +339,6 @@ static int fault_proc_show(struct seq_file *m, void *v)
                    fault_ctrl.specific_fault_enabled[i] ? "Enabled" : "Disabled",
                    fault_ctrl.fault_weights[i],
                    fault_ctrl.faults_by_type[i]);
-    }
-
-    seq_printf(m, "\nTarget Drivers:\n");
-    for (i = 0; i < num_target_drivers; i++) {
-        seq_printf(m, "  Driver %d: %s (%s)\n", i, target_drivers[i].name, 
-                  target_drivers[i].active ? "active" : "inactive");
-        seq_printf(m, "    Target Functions:\n");
-        for (j = 0; j < target_drivers[i].num_functions; j++) {
-            seq_printf(m, "      %s\n", target_drivers[i].function_names[j]);
-        }
-    }
-    
-    seq_printf(m, "\nActive Hooks:\n");
-    for (i = 0; i < num_hooks; i++) {
-        seq_printf(m, "  Hook %d: %s -> 0x%lx (%s)\n", 
-                   i, 
-                   hooks[i].name, 
-                   hooks[i].hook_addr,
-                   hooks[i].hooked ? "active" : "inactive");
     }
     
     return 0;
@@ -500,8 +399,6 @@ static int __init init_fault_injection(void)
  */
 static void __exit cleanup_fault_injection(void)
 {
-    int i, j;
-
     /* Disable fault injection */
     fault_ctrl.enabled = false;
     
@@ -511,18 +408,6 @@ static void __exit cleanup_fault_injection(void)
     /* Remove proc entry */
     if (fault_proc_entry)
         proc_remove(fault_proc_entry);
-    
-    /* Free all target function names */
-    for (i = 0; i < num_target_drivers; i++) {
-        for (j = 0; j < target_drivers[i].num_functions; j++) {
-            kfree(target_drivers[i].function_names[j]);
-        }
-    }
-    
-    /* Free all hook function names */
-    for (i = 0; i < num_hooks; i++) {
-        kfree(hooks[i].name);
-    }
     
     printk(KERN_INFO "Fault injection module unloaded\n");
 }
@@ -575,63 +460,6 @@ static ssize_t fault_proc_write(struct file *file, const char __user *buffer,
             fault_ctrl.target_driver[sizeof(fault_ctrl.target_driver) - 1] = '\0';
             printk(KERN_INFO "Fault injection: Target set to %s\n", 
                    fault_ctrl.target_driver);
-        }
-    } else if (strncmp(cmd, "hook ", 5) == 0) {
-        /* Install a function hook */
-        char function_name[64];
-        unsigned long hook_addr;
-        if (sscanf(cmd + 5, "%63s %lx", function_name, &hook_addr) == 2) {
-            int result = install_hook(function_name, hook_addr);
-            if (result == 0) {
-                printk(KERN_INFO "Fault injection: Hooked function %s to 0x%lx\n", 
-                       function_name, hook_addr);
-            } else {
-                printk(KERN_WARNING "Fault injection: Failed to hook function %s\n", 
-                       function_name);
-            }
-        }
-    } else if (strncmp(cmd, "register_driver ", 15) == 0) {
-        /* Register a new target driver */
-        char driver_name[64];
-        if (sscanf(cmd + 15, "%63s", driver_name) == 1) {
-            int result = register_target_driver(driver_name);
-            if (result >= 0) {
-                printk(KERN_INFO "Fault injection: Registered driver %s (idx %d)\n", 
-                       driver_name, result);
-            } else {
-                printk(KERN_WARNING "Fault injection: Failed to register driver %s\n", 
-                       driver_name);
-            }
-        }
-    } else if (strncmp(cmd, "add_function ", 13) == 0) {
-        /* Add a target function to a driver */
-        int driver_idx;
-        char function_name[64];
-        if (sscanf(cmd + 13, "%d %63s", &driver_idx, function_name) == 2) {
-            int result = add_target_function(driver_idx, function_name);
-            if (result == 0) {
-                printk(KERN_INFO "Fault injection: Added function %s to driver %d\n", 
-                       function_name, driver_idx);
-            } else {
-                printk(KERN_WARNING "Fault injection: Failed to add function %s to driver %d\n", 
-                       function_name, driver_idx);
-            }
-        }
-    } else if (strncmp(cmd, "set_driver_state ", 17) == 0) {
-        /* Enable/disable a target driver */
-        int driver_idx;
-        char state[16];
-        if (sscanf(cmd + 17, "%d %15s", &driver_idx, state) == 2 &&
-            driver_idx >= 0 && driver_idx < num_target_drivers) {
-            if (strncmp(state, "active", 6) == 0) {
-                target_drivers[driver_idx].active = true;
-                printk(KERN_INFO "Fault injection: Activated driver %d (%s)\n", 
-                       driver_idx, target_drivers[driver_idx].name);
-            } else if (strncmp(state, "inactive", 8) == 0) {
-                target_drivers[driver_idx].active = false;
-                printk(KERN_INFO "Fault injection: Deactivated driver %d (%s)\n", 
-                       driver_idx, target_drivers[driver_idx].name);
-            }
         }
     } else if (strncmp(cmd, "probability ", 12) == 0) {
         /* Set fault probability */
