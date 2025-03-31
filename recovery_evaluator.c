@@ -18,71 +18,6 @@
 #include <linux/version.h>
 #include <linux/stdarg.h>
 
-/* Move these function declarations to the top before any functions that use them */
-int start_test(const char *name, const char *driver);
-int end_test(bool success);
-int add_event(struct recovery_test *test, enum recovery_phase phase, const char *fmt, ...);
-int register_test_app(const char *name, const char *driver_class, bool (*check_func)(void));
-int run_trial(int app_idx, int trial_number);
-
-/* Define application test information */
-struct app_test_info {
-    char name[64];
-    char driver_class[32];
-    bool (*check_working)(void);  /* Function to check if app still works */
-    int manual_recovery_attempts;
-    bool last_test_successful;
-    
-    /* Statistics */
-    int total_trials;
-    int automatic_recovery;
-    int manual_recovery;
-    int failed_recovery;
-};
-
-#define MAX_TEST_APPS 10
-static struct app_test_info test_apps[MAX_TEST_APPS];
-static int num_test_apps = 0;
-
-/* Register an application for testing */
-int register_test_app(const char *name, const char *driver_class, 
-                     bool (*check_func)(void)) {
-    if (num_test_apps >= MAX_TEST_APPS)
-        return -ENOSPC;
-        
-    strncpy(test_apps[num_test_apps].name, name, 63);
-    strncpy(test_apps[num_test_apps].driver_class, driver_class, 31);
-    test_apps[num_test_apps].check_working = check_func;
-    test_apps[num_test_apps].total_trials = 0;
-    test_apps[num_test_apps].automatic_recovery = 0;
-    test_apps[num_test_apps].manual_recovery = 0;
-    test_apps[num_test_apps].failed_recovery = 0;
-    
-    num_test_apps++;
-    return 0;
-}
-EXPORT_SYMBOL(register_test_app);
-
-int run_trial(int app_idx, int trial_number) {
-    char test_name[128];
-    struct app_test_info *app;
-    
-    if (app_idx < 0 || app_idx >= num_test_apps)
-        return -EINVAL;
-        
-    app = &test_apps[app_idx];
-    
-    /* Start a new test case */
-    snprintf(test_name, sizeof(test_name), "%s_trial_%d", app->name, trial_number);
-    start_test(test_name, app->driver_class);
-    
-    /* Trigger fault injection */
-    /* This would normally call into fault_injection.c */
-    
-    return 0;
-}
-EXPORT_SYMBOL(run_trial);
-
 /* Maximum number of test cases to store */
 #define MAX_TEST_CASES 50
 
@@ -131,6 +66,34 @@ struct recovery_test {
     struct list_head list;
 };
 
+/* Function declarations for recovery test */
+int start_test(const char *name, const char *driver);
+int end_test(bool success);
+int add_event(struct recovery_test *test, enum recovery_phase phase, const char *fmt, ...);
+
+/* Define application test information */
+struct app_test_info {
+    char name[64];
+    char driver_class[32];
+    bool (*check_working)(void);  /* Function to check if app still works */
+    int manual_recovery_attempts;
+    bool last_test_successful;
+    
+    /* Statistics */
+    int total_trials;
+    int automatic_recovery;
+    int manual_recovery;
+    int failed_recovery;
+};
+
+/* Function declarations for application testing */
+int register_test_app(const char *name, const char *driver_class, bool (*check_func)(void));
+int run_trial(int app_idx, int trial_number);
+
+#define MAX_TEST_APPS 10
+static struct app_test_info test_apps[MAX_TEST_APPS];
+static int num_test_apps = 0;
+
 /* Global state */
 static LIST_HEAD(test_cases);
 static int num_test_cases = 0;
@@ -138,8 +101,44 @@ static struct recovery_test *current_test = NULL;
 static spinlock_t test_lock;
 static struct proc_dir_entry *recovery_proc_entry;
 
+/* Register an application for testing */
+int register_test_app(const char *name, const char *driver_class, 
+                     bool (*check_func)(void)) {
+    if (num_test_apps >= MAX_TEST_APPS)
+        return -ENOSPC;
+        
+    strncpy(test_apps[num_test_apps].name, name, 63);
+    strncpy(test_apps[num_test_apps].driver_class, driver_class, 31);
+    test_apps[num_test_apps].check_working = check_func;
+    test_apps[num_test_apps].total_trials = 0;
+    test_apps[num_test_apps].automatic_recovery = 0;
+    test_apps[num_test_apps].manual_recovery = 0;
+    test_apps[num_test_apps].failed_recovery = 0;
+    
+    num_test_apps++;
+    return 0;
+}
+EXPORT_SYMBOL(register_test_app);
 
-
+int run_trial(int app_idx, int trial_number) {
+    char test_name[128];
+    struct app_test_info *app;
+    
+    if (app_idx < 0 || app_idx >= num_test_apps)
+        return -EINVAL;
+        
+    app = &test_apps[app_idx];
+    
+    /* Start a new test case */
+    snprintf(test_name, sizeof(test_name), "%s_trial_%d", app->name, trial_number);
+    start_test(test_name, app->driver_class);
+    
+    /* Trigger fault injection */
+    /* This would normally call into fault_injection.c */
+    
+    return 0;
+}
+EXPORT_SYMBOL(run_trial);
 /**
  * start_test - Start a new recovery test
  * @name: Name of the test
