@@ -15,6 +15,69 @@
 #include <linux/time.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
+#include <linux/version.h>
+#include <linux/stdarg.h>
+
+int register_test_app(const char *name, const char *driver_class, bool (*check_func)(void));
+int run_trial(int app_idx, int trial_number);
+
+/* Define application test information */
+struct app_test_info {
+    char name[64];
+    char driver_class[32];
+    bool (*check_working)(void);  /* Function to check if app still works */
+    int manual_recovery_attempts;
+    bool last_test_successful;
+    
+    /* Statistics */
+    int total_trials;
+    int automatic_recovery;
+    int manual_recovery;
+    int failed_recovery;
+};
+
+#define MAX_TEST_APPS 10
+static struct app_test_info test_apps[MAX_TEST_APPS];
+static int num_test_apps = 0;
+
+/* Register an application for testing */
+int register_test_app(const char *name, const char *driver_class, 
+                     bool (*check_func)(void)) {
+    if (num_test_apps >= MAX_TEST_APPS)
+        return -ENOSPC;
+        
+    strncpy(test_apps[num_test_apps].name, name, 63);
+    strncpy(test_apps[num_test_apps].driver_class, driver_class, 31);
+    test_apps[num_test_apps].check_working = check_func;
+    test_apps[num_test_apps].total_trials = 0;
+    test_apps[num_test_apps].automatic_recovery = 0;
+    test_apps[num_test_apps].manual_recovery = 0;
+    test_apps[num_test_apps].failed_recovery = 0;
+    
+    num_test_apps++;
+    return 0;
+}
+EXPORT_SYMBOL(register_test_app);
+
+int run_trial(int app_idx, int trial_number) {
+    char test_name[128];
+    struct app_test_info *app;
+    
+    if (app_idx < 0 || app_idx >= num_test_apps)
+        return -EINVAL;
+        
+    app = &test_apps[app_idx];
+    
+    /* Start a new test case */
+    snprintf(test_name, sizeof(test_name), "%s_trial_%d", app->name, trial_number);
+    start_test(test_name, app->driver_class);
+    
+    /* Trigger fault injection */
+    /* This would normally call into fault_injection.c */
+    
+    return 0;
+}
+EXPORT_SYMBOL(run_trial);
 
 /* Maximum number of test cases to store */
 #define MAX_TEST_CASES 50
@@ -31,7 +94,6 @@ enum recovery_phase {
     PHASE_RECOVERY_COMPLETE,  /* Recovery has completed successfully */
     PHASE_RECOVERY_FAILED     /* Recovery has failed */
 };
-
 
 /* Structure to track recovery events */
 struct recovery_event {
@@ -64,10 +126,6 @@ struct recovery_test {
     /* Linked list */
     struct list_head list;
 };
-static int add_event(struct recovery_test *test, enum recovery_phase phase, 
-                    const char *fmt, ...);
-static int start_test(const char *name, const char *driver);
-static int end_test(bool success);
 
 /* Global state */
 static LIST_HEAD(test_cases);
@@ -75,6 +133,12 @@ static int num_test_cases = 0;
 static struct recovery_test *current_test = NULL;
 static spinlock_t test_lock;
 static struct proc_dir_entry *recovery_proc_entry;
+
+/* Function declarations - these aren't static because they're exported */
+int add_event(struct recovery_test *test, enum recovery_phase phase, 
+              const char *fmt, ...);
+int start_test(const char *name, const char *driver);
+int end_test(bool success);
 
 /**
  * start_test - Start a new recovery test
@@ -109,12 +173,7 @@ int start_test(const char *name, const char *driver)
         /* If there's a current test, mark it as incomplete */
         current_test->completed = false;
         current_test->end_time = jiffies;
-        // add_event(current_test, PHASE_NONE, "Test interrupted by new test");
-        /* With: */
-        if (current_test) {
-            struct recovery_test *test = current_test;
-            add_event(test, PHASE_NONE, "Test interrupted by new test");
-}
+        add_event(current_test, PHASE_NONE, "Test interrupted by new test");
     }
     
     if (num_test_cases >= MAX_TEST_CASES) {
@@ -292,6 +351,19 @@ static int recovery_proc_show(struct seq_file *m, void *v)
     seq_printf(m, "  Current test: %s\n", 
                current_test ? current_test->name : "None");
     
+    /* Show registered application tests */
+    seq_printf(m, "\nRegistered Application Tests: %d\n", num_test_apps);
+    for (i = 0; i < num_test_apps; i++) {
+        struct app_test_info *app = &test_apps[i];
+        seq_printf(m, "  App: %s (Driver class: %s)\n", app->name, app->driver_class);
+        seq_printf(m, "    Total trials: %d\n", app->total_trials);
+        seq_printf(m, "    Auto recovery: %d\n", app->automatic_recovery);
+        seq_printf(m, "    Manual recovery: %d\n", app->manual_recovery);
+        seq_printf(m, "    Failed recovery: %d\n", app->failed_recovery);
+        seq_printf(m, "    Last test: %s\n", 
+                  app->last_test_successful ? "Successful" : "Failed");
+    }
+    
     seq_printf(m, "\nTest Cases:\n");
     list_for_each_entry(test, &test_cases, list) {
         /* Convert jiffies to more readable form */
@@ -398,6 +470,12 @@ static ssize_t recovery_proc_write(struct file *file, const char __user *buffer,
                 
             add_event(NULL, phase, "%s", desc);
         }
+    } else if (strncmp(cmd, "run ", 4) == 0) {
+        int app_idx, trial_num;
+        
+        if (sscanf(cmd + 4, "%d %d", &app_idx, &trial_num) == 2) {
+            run_trial(app_idx, trial_num);
+        }
     } else if (strncmp(cmd, "clear", 5) == 0) {
         /* Clear all test cases */
         struct recovery_test *test, *tmp;
@@ -423,14 +501,15 @@ static ssize_t recovery_proc_write(struct file *file, const char __user *buffer,
     return count;
 }
 
-/* File operations for the proc file */
+/* Replace file_operations with proc_ops */
 static const struct proc_ops recovery_proc_fops = {
     .proc_open = recovery_proc_open,
     .proc_read = seq_read,
     .proc_write = recovery_proc_write,
     .proc_lseek = seq_lseek,
-    .proc_release = single_release,
+    .proc_release = single_release
 };
+
 /**
  * init_recovery_evaluator - Initialize the recovery evaluator
  *
