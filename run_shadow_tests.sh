@@ -22,8 +22,12 @@ if [ -n "$2" ]; then
     TEST_DURATION="$2"
 fi
 
+# Set the project directory path
+PROJECT_DIR="$(pwd)"
+echo "Project directory: $PROJECT_DIR"
+
 # Create results directory
-RESULTS_DIR="test_results_$(date +%Y%m%d_%H%M%S)"
+RESULTS_DIR="$PROJECT_DIR/test_results_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$RESULTS_DIR"
 echo "Test results will be saved to: $RESULTS_DIR"
 
@@ -89,41 +93,82 @@ rmmod recovery_evaluator 2>/dev/null
 # Log starting point in dmesg
 echo "Shadow Driver Testing Started at $(date)" > /dev/kmsg
 
-# Build all modules
+# Build all modules if they exist
 echo "Building all modules..."
-cd ~/shadow_driver_project/recovery_evaluator
-make clean && make
-cd ../fault_injection
-make clean && make
-cd ../network_shadow
-make clean && make
-cd ../app_test_harness
-make clean && make
-cd ..
+if [ -d "$PROJECT_DIR/recovery_evaluator" ]; then
+    cd "$PROJECT_DIR/recovery_evaluator"
+    make clean && make
+else
+    echo "Warning: recovery_evaluator directory not found"
+fi
 
-# Load modules
+if [ -d "$PROJECT_DIR/fault_injection" ]; then
+    cd "$PROJECT_DIR/fault_injection"
+    make clean && make
+else
+    echo "Warning: fault_injection directory not found"
+fi
+
+if [ -d "$PROJECT_DIR/network_shadow" ]; then
+    cd "$PROJECT_DIR/network_shadow"
+    make clean && make
+else
+    echo "Warning: network_shadow directory not found"
+fi
+
+if [ -d "$PROJECT_DIR/app_test_harness" ]; then
+    cd "$PROJECT_DIR/app_test_harness"
+    make clean && make
+else
+    echo "Warning: app_test_harness directory not found"
+fi
+
+# Return to the project directory
+cd "$PROJECT_DIR"
+
+# Load modules - adjust paths based on where the .ko files are
 echo "Loading modules..."
-insmod recovery_evaluator/recovery_evaluator.ko
-if [ $? -ne 0 ]; then
-    echo "Failed to load recovery_evaluator module!"
+if [ -f "$PROJECT_DIR/recovery_evaluator/recovery_evaluator.ko" ]; then
+    insmod "$PROJECT_DIR/recovery_evaluator/recovery_evaluator.ko"
+    if [ $? -ne 0 ]; then
+        echo "Failed to load recovery_evaluator module!"
+        exit 1
+    fi
+else
+    echo "Error: recovery_evaluator.ko not found"
     exit 1
 fi
 
-insmod fault_injection/fault_injection.ko
-if [ $? -ne 0 ]; then
-    echo "Failed to load fault_injection module!"
+if [ -f "$PROJECT_DIR/fault_injection/fault_injection.ko" ]; then
+    insmod "$PROJECT_DIR/fault_injection/fault_injection.ko"
+    if [ $? -ne 0 ]; then
+        echo "Failed to load fault_injection module!"
+        exit 1
+    fi
+else
+    echo "Error: fault_injection.ko not found"
     exit 1
 fi
 
-insmod network_shadow/network_shadow.ko device=eth0
-if [ $? -ne 0 ]; then
-    echo "Failed to load network_shadow module!"
+if [ -f "$PROJECT_DIR/network_shadow/network_shadow.ko" ]; then
+    insmod "$PROJECT_DIR/network_shadow/network_shadow.ko" device=eth0
+    if [ $? -ne 0 ]; then
+        echo "Failed to load network_shadow module!"
+        exit 1
+    fi
+else
+    echo "Error: network_shadow.ko not found"
     exit 1
 fi
 
-insmod app_test_harness/app_test_harness.ko
-if [ $? -ne 0 ]; then
-    echo "Failed to load app_test_harness module!"
+if [ -f "$PROJECT_DIR/app_test_harness/app_test_harness.ko" ]; then
+    insmod "$PROJECT_DIR/app_test_harness/app_test_harness.ko"
+    if [ $? -ne 0 ]; then
+        echo "Failed to load app_test_harness module!"
+        exit 1
+    fi
+else
+    echo "Error: app_test_harness.ko not found"
     exit 1
 fi
 
@@ -211,11 +256,19 @@ echo "Creating summary report..."
     
     # Extract and summarize test results
     echo "Test Results:"
-    grep -A 20 "App Test Harness Status" "$RESULTS_DIR/app_test_status_final.txt" | grep -E "App [0-9]|Running|Trials|Recovery"
+    if [ -f "$RESULTS_DIR/app_test_status_final.txt" ]; then
+        grep -A 20 "App Test Harness Status" "$RESULTS_DIR/app_test_status_final.txt" | grep -E "App [0-9]|Running|Trials|Recovery"
+    else
+        echo "No final app test status available"
+    fi
     
     echo ""
     echo "Fault Injection Stats:"
-    grep -A 5 "Fault Injection Status" "$RESULTS_DIR/fault_injection_status_final.txt"
+    if [ -f "$RESULTS_DIR/fault_injection_status_final.txt" ]; then
+        grep -A 5 "Fault Injection Status" "$RESULTS_DIR/fault_injection_status_final.txt"
+    else
+        echo "No final fault injection status available"
+    fi
     
     echo ""
     echo "See the detailed logs in the $RESULTS_DIR directory for more information."
