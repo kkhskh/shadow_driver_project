@@ -152,8 +152,10 @@ static struct timer_list fault_timer;
  *
  * Called when the fault injection timer expires
  */
-static void fault_timer_callback(unsigned long data)
+
+static void fault_timer_callback(struct timer_list *t)
 {
+    // Remove the 'unsigned long data' parameter
     if (fault_ctrl.enabled) {
         /* Determine if we should inject a fault based on probability */
         unsigned int rand;
@@ -457,14 +459,13 @@ static int fault_proc_open(struct inode *inode, struct file *file)
     return single_open(file, fault_proc_show, NULL);
 }
 
-/* File operations for the /proc entry */
-static const struct file_operations fault_proc_fops = {
-    .owner   = THIS_MODULE,
-    .open    = fault_proc_open,
-    .read    = seq_read,
-    .write   = fault_proc_write,
-    .llseek  = seq_lseek,
-    .release = single_release,
+/* File operations for the /proc entry - for newer kernels */
+static const struct proc_ops fault_proc_ops = {
+    .proc_open    = fault_proc_open,
+    .proc_read    = seq_read,
+    .proc_write   = fault_proc_write, 
+    .proc_lseek   = seq_lseek,
+    .proc_release = single_release,
 };
 
 /* Proc entry */
@@ -472,16 +473,14 @@ static struct proc_dir_entry *fault_proc_entry;
 
 /**
  * init_fault_injection - Initialize the fault injection system
- *
- * Sets up timers and proc filesystem entries
  */
 static int __init init_fault_injection(void)
 {
     /* Initialize the fault timer */
-    setup_timer(&fault_timer, fault_timer_callback, 0);
+    timer_setup(&fault_timer, fault_timer_callback, 0);
     
     /* Create proc entry */
-    fault_proc_entry = proc_create("fault_injection", 0644, NULL, &fault_proc_fops);
+    fault_proc_entry = proc_create("fault_injection", 0644, NULL, &fault_proc_ops);
     if (!fault_proc_entry) {
         printk(KERN_ERR "Failed to create /proc/fault_injection\n");
         return -ENOMEM;
