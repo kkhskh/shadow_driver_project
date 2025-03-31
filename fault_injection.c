@@ -15,7 +15,37 @@
 #include <linux/uaccess.h>
 #include <linux/delay.h>
 #include <linux/kallsyms.h>
+#include <linux/kprobes.h>  
 
+/* Add the kprobe-based kallsyms_lookup_name solution here */
+static unsigned long lookup_name(const char *name)
+{
+    struct kprobe kp = {
+        .symbol_name = name
+    };
+    unsigned long addr;
+    
+    if (register_kprobe(&kp) < 0)
+        return 0;
+        
+    addr = (unsigned long)kp.addr;
+    unregister_kprobe(&kp);
+    
+    return addr;
+}
+static unsigned long (*kallsyms_lookup_name_func)(const char *name);
+
+static int init_kallsyms_lookup(void)
+{
+    /* First check if kallsyms_lookup_name is still directly available */
+    kallsyms_lookup_name_func = (void*)lookup_name("kallsyms_lookup_name");
+    if (!kallsyms_lookup_name_func) {
+        printk(KERN_ERR "Fault injection: Could not find kallsyms_lookup_name\n");
+        return -EINVAL;
+    }
+    
+    return 0;
+}
 /* Fault types that can be injected */
 enum fault_type {
     FAULT_NULL_POINTER    = 0,  /* Dereference a null pointer */
@@ -56,7 +86,9 @@ static int num_hooks = 0;
 
 /* Function to install a hook (this is simplified - actual implementation would be more complex) */
 static int install_hook(const char *function_name, unsigned long hook_addr) {
-    unsigned long addr = kallsyms_lookup_name(function_name);
+    unsigned long addr;
+    
+    addr = kallsyms_lookup_name_func(function_name);
     if (!addr)
         return -EINVAL;
         
@@ -476,6 +508,15 @@ static struct proc_dir_entry *fault_proc_entry;
  */
 static int __init init_fault_injection(void)
 {
+    int ret;
+
+    /* Initialize the kallsyms lookup function */
+    ret = init_kallsyms_lookup();
+    if (ret < 0) {
+        printk(KERN_ERR "Fault injection: Failed to initialize kallsyms lookup\n");
+        return ret;
+    }
+    
     /* Initialize the fault timer */
     timer_setup(&fault_timer, fault_timer_callback, 0);
     
