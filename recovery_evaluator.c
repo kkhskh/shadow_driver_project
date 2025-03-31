@@ -18,6 +18,10 @@
 #include <linux/version.h>
 #include <linux/stdarg.h>
 
+/* Move these function declarations to the top before any functions that use them */
+int start_test(const char *name, const char *driver);
+int end_test(bool success);
+int add_event(struct recovery_test *test, enum recovery_phase phase, const char *fmt, ...);
 int register_test_app(const char *name, const char *driver_class, bool (*check_func)(void));
 int run_trial(int app_idx, int trial_number);
 
@@ -134,11 +138,7 @@ static struct recovery_test *current_test = NULL;
 static spinlock_t test_lock;
 static struct proc_dir_entry *recovery_proc_entry;
 
-/* Function declarations - these aren't static because they're exported */
-int add_event(struct recovery_test *test, enum recovery_phase phase, 
-              const char *fmt, ...);
-int start_test(const char *name, const char *driver);
-int end_test(bool success);
+
 
 /**
  * start_test - Start a new recovery test
