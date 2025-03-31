@@ -17,122 +17,6 @@
 #include <linux/kallsyms.h>
 #include <linux/kprobes.h>  
 
-/* Define the outcome types that match Figure 6 in the paper */
-#define OUTCOME_AUTOMATIC_RECOVERY 1
-#define OUTCOME_MANUAL_RECOVERY 2
-#define OUTCOME_FAILED_RECOVERY 3
-
-/* Structure to store test results for each driver/application pair */
-struct test_results {
-    char driver_name[64];
-    char app_name[64];
-    int total_trials;
-    int automatic_recovery;
-    int manual_recovery;
-    int failed_recovery;
-};
-
-/* Initialize with the 6 combinations from the paper */
-static struct test_results results_table[] = {
-    {"snd", "mp3_player", 0, 0, 0, 0},
-    {"snd", "audio_recorder", 0, 0, 0, 0},
-    {"e1000", "network_file_transfer", 0, 0, 0, 0},
-    {"e1000", "network_analyzer", 0, 0, 0, 0},
-    {"ide", "compiler", 0, 0, 0, 0},
-    {"ide", "database", 0, 0, 0, 0}
-};
-#define NUM_RESULTS (sizeof(results_table) / sizeof(results_table[0]))
-
-/* Function to record a trial outcome */
-void record_outcome(const char *driver, const char *app, int outcome)
-{
-    int i;
-    for (i = 0; i < NUM_RESULTS; i++) {
-        if (strcmp(results_table[i].driver_name, driver) == 0 &&
-            strcmp(results_table[i].app_name, app) == 0) {
-            
-            results_table[i].total_trials++;
-            
-            switch (outcome) {
-                case OUTCOME_AUTOMATIC_RECOVERY:
-                    results_table[i].automatic_recovery++;
-                    break;
-                case OUTCOME_MANUAL_RECOVERY:
-                    results_table[i].manual_recovery++;
-                    break;
-                case OUTCOME_FAILED_RECOVERY:
-                    results_table[i].failed_recovery++;
-                    break;
-            }
-            
-            printk(KERN_INFO "Recorded outcome %d for %s/%s (trials: %d)\n",
-                   outcome, driver, app, results_table[i].total_trials);
-            return;
-        }
-    }
-    
-    printk(KERN_WARNING "Unknown driver/app pair: %s/%s\n", driver, app);
-}
-EXPORT_SYMBOL(record_outcome);
-
-/* Function to simulate paper results (for demonstration) */
-static void simulate_paper_results(void)
-{
-    int i;
-    
-    /* Clear current results */
-    for (i = 0; i < NUM_RESULTS; i++) {
-        results_table[i].total_trials = 0;
-        results_table[i].automatic_recovery = 0;
-        results_table[i].manual_recovery = 0;
-        results_table[i].failed_recovery = 0;
-    }
-    
-    /* mp3 player */
-    for (i = 0; i < 79; i++)
-        record_outcome("snd", "mp3_player", OUTCOME_AUTOMATIC_RECOVERY);
-    for (i = 0; i < 16; i++)
-        record_outcome("snd", "mp3_player", OUTCOME_MANUAL_RECOVERY);
-    for (i = 0; i < 5; i++)
-        record_outcome("snd", "mp3_player", OUTCOME_FAILED_RECOVERY);
-        
-    /* audio recorder */
-    for (i = 0; i < 44; i++)
-        record_outcome("snd", "audio_recorder", OUTCOME_AUTOMATIC_RECOVERY);
-    for (i = 0; i < 56; i++)
-        record_outcome("snd", "audio_recorder", OUTCOME_MANUAL_RECOVERY);
-        
-    /* network file transfer */
-    for (i = 0; i < 97; i++)
-        record_outcome("e1000", "network_file_transfer", OUTCOME_AUTOMATIC_RECOVERY);
-    for (i = 0; i < 3; i++)
-        record_outcome("e1000", "network_file_transfer", OUTCOME_MANUAL_RECOVERY);
-        
-    /* network analyzer */
-    for (i = 0; i < 76; i++)
-        record_outcome("e1000", "network_analyzer", OUTCOME_AUTOMATIC_RECOVERY);
-    for (i = 0; i < 24; i++)
-        record_outcome("e1000", "network_analyzer", OUTCOME_MANUAL_RECOVERY);
-    
-    /* compiler */
-    for (i = 0; i < 38; i++)
-        record_outcome("ide", "compiler", OUTCOME_AUTOMATIC_RECOVERY);
-    for (i = 0; i < 58; i++)
-        record_outcome("ide", "compiler", OUTCOME_MANUAL_RECOVERY);
-    for (i = 0; i < 4; i++)
-        record_outcome("ide", "compiler", OUTCOME_FAILED_RECOVERY);
-        
-    /* database */
-    for (i = 0; i < 58; i++)
-        record_outcome("ide", "database", OUTCOME_AUTOMATIC_RECOVERY);
-    for (i = 0; i < 38; i++)
-        record_outcome("ide", "database", OUTCOME_MANUAL_RECOVERY);
-    for (i = 0; i < 4; i++)
-        record_outcome("ide", "database", OUTCOME_FAILED_RECOVERY);
-        
-    printk(KERN_INFO "Simulated paper results complete\n");
-}
-
 /* Add the kprobe-based kallsyms_lookup_name solution here */
 static unsigned long lookup_name(const char *name)
 {
@@ -591,32 +475,6 @@ static int fault_proc_show(struct seq_file *m, void *v)
                    hooks[i].hook_addr,
                    hooks[i].hooked ? "active" : "inactive");
     }
-    seq_printf(m, "\nFault Injection Results:\n");
-    seq_printf(m, "Driver/App                    | Trials | Auto | Manual | Failed\n");
-    seq_printf(m, "-----------------------------|--------|------|--------|-------\n");
-
-    for (i = 0; i < NUM_RESULTS; i++) {
-        struct test_results *res = &results_table[i];
-        if (res->total_trials > 0) {
-            char name[80];
-            int auto_pct, manual_pct, failed_pct;
-            
-            snprintf(name, sizeof(name), "%s/%s", res->driver_name, res->app_name);
-            
-            auto_pct = res->total_trials > 0 ? 
-                (res->automatic_recovery * 100) / res->total_trials : 0;
-                
-            manual_pct = res->total_trials > 0 ? 
-                (res->manual_recovery * 100) / res->total_trials : 0;
-                
-            failed_pct = res->total_trials > 0 ? 
-                (res->failed_recovery * 100) / res->total_trials : 0;
-            
-            seq_printf(m, "%-28s | %6d | %3d%% | %5d%% | %5d%%\n",
-                   name, res->total_trials, 
-                   auto_pct, manual_pct, failed_pct);
-        }
-    }
     
     return 0;
 }
@@ -853,28 +711,6 @@ static ssize_t fault_proc_write(struct file *file, const char __user *buffer,
             printk(KERN_INFO "Fault injection: Set weight %u for fault type %u\n", 
                    weight, type);
         }
-    } else if (strncmp(cmd, "simulate_results", 15) == 0) {
-        /* Simulate the results from the paper */
-        simulate_paper_results();
-        printk(KERN_INFO "Fault injection: Simulated paper results\n");
-    } else if (strncmp(cmd, "record ", 7) == 0) {
-        /* Record a specific outcome: "record driver app outcome" */
-        char driver[64], app[64];
-        int outcome;
-        
-        if (sscanf(cmd + 7, "%63s %63s %d", driver, app, &outcome) == 3) {
-            record_outcome(driver, app, outcome);
-        }
-    } else if (strncmp(cmd, "reset_results", 12) == 0) {
-        /* Reset all result counters */
-        int i;
-        for (i = 0; i < NUM_RESULTS; i++) {
-            results_table[i].total_trials = 0;
-            results_table[i].automatic_recovery = 0;
-            results_table[i].manual_recovery = 0;
-            results_table[i].failed_recovery = 0;
-        }
-        printk(KERN_INFO "Fault injection: Reset all results\n");
     } else {
         printk(KERN_WARNING "Fault injection: Unknown command: %s\n", cmd);
     }
